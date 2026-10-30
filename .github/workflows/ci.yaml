@@ -22,4 +22,13 @@ jobs:
         with:
           primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock', 'rust-toolchain.toml', '.github/workflows/ci.yaml') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - run: nix develop --command camas
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stm32-embassy
+          path: target/thumbv7em-none-eabihf/release/stm32-embassy
+          if-no-files-found: error
