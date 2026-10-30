@@ -1,7 +1,7 @@
 from camas import Claude, Config, Parallel, Sequential, Task
 
 fmt = Parallel(
-    Task("cargo fmt", mutates=True),
+    Task("cargo fmt --all", mutates=True),
     Task("nixfmt flake.nix", mutates=True),
     Task("ruff format", mutates=True),
     Task("taplo fmt", mutates=True),
@@ -9,7 +9,7 @@ fmt = Parallel(
 )
 
 fmt_check = Parallel(
-    "cargo fmt --check",
+    "cargo fmt --all --check",
     "nixfmt --check flake.nix",
     "ruff format --check",
     "taplo fmt --check",
@@ -23,9 +23,15 @@ lint = Parallel(
     "zizmor .",
 )
 
-clippy = Task("cargo clippy --release -- -D warnings")
+clippy = Task("cargo clippy --workspace --release -- -D warnings")
+clippy_app = Task(
+    "cargo clippy -p app --all-targets --target host-tuple -- -D warnings"
+)
+test = Task("cargo test -p app --target host-tuple")
 build = Task("cargo build --release")
-check = Parallel(fmt_check, lint, Sequential(clippy, build, name="cargo"))
+check = Parallel(
+    fmt_check, lint, Sequential(clippy, clippy_app, test, build, name="cargo")
+)
 
 flash = Task("cargo run --release")
 

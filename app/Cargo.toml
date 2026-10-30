@@ -1,0 +1,12 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+embedded-hal = "1.0.0"
+defmt = { version = "1.0.1", optional = true }
+
+[features]
+defmt = ["dep:defmt", "embedded-hal/defmt-03"]

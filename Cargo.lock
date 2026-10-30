@@ -21,6 +21,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "app"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.2.0",
+ "embedded-hal 1.0.0",
+]
+
+[[package]]
 name = "as-slice"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -495,6 +503,9 @@ name = "embedded-hal"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
+dependencies = [
+ "defmt 0.3.101",
+]
 
 [[package]]
 name = "embedded-hal-async"
@@ -896,13 +907,17 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 name = "stm32-embassy"
 version = "0.1.0"
 dependencies = [
+ "app",
  "cortex-m",
  "cortex-m-rt",
  "defmt 1.2.0",
  "defmt-rtt",
  "embassy-executor",
  "embassy-stm32",
+ "embassy-sync",
  "embassy-time",
+ "embedded-hal 1.0.0",
+ "futures-util",
  "panic-probe",
 ]
 

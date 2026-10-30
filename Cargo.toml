@@ -4,18 +4,26 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[workspace]
+members = ["app"]
+
 [[bin]]
 name = "stm32-embassy"
 test = false
 bench = false
 
 [dependencies]
+app = { path = "app", features = ["defmt"] }
+embassy-sync = { version = "0.8.0", features = ["defmt"] }
+futures-util = { version = "0.3.34", default-features = false }
+embedded-hal = "1.0.0"
 embassy-stm32 = { version = "0.6.0", features = [
   "defmt",
   "stm32f407vg",
   "memory-x",
   "time-driver-any",
   "exti",
+  "unstable-pac",
 ] }
 embassy-executor = { version = "0.10.0", features = [
   "platform-cortex-m",
