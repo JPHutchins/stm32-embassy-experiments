@@ -1,6 +1,6 @@
 extern crate std;
 
-use crate::{Board, EdgeInput, Event, Post, Timer};
+use crate::{AdcReport, Board, EdgeInput, Post, Pressed, Sampler, Timer};
 use core::convert::Infallible;
 use embedded_hal::digital::{ErrorType, OutputPin, PinState};
 use std::vec::Vec;
@@ -12,7 +12,9 @@ impl Board for MockBoard {
     type BlinkTimer = MockTimer;
     type Button = MockPin;
     type DebounceTimer = MockTimer;
-    type Events = MockEvents;
+    type Presses = MockPresses;
+    type Sampler = MockSampler;
+    type Reports = MockReports;
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -88,16 +90,43 @@ impl EdgeInput for MockPin {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct MockEvents(Vec<Event>);
+pub struct MockPresses(pub usize);
 
-impl From<&[Event]> for MockEvents {
-    fn from(events: &[Event]) -> Self {
-        Self(events.to_vec())
+impl Post<Pressed> for MockPresses {
+    fn posted(self, _: Pressed) -> Self {
+        Self(self.0 + 1)
     }
 }
 
-impl Post<Event> for MockEvents {
-    fn posted(self, event: Event) -> Self {
-        Self(self.0.into_iter().chain([event]).collect())
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct MockReports(Vec<AdcReport>);
+
+impl From<&[AdcReport]> for MockReports {
+    fn from(reports: &[AdcReport]) -> Self {
+        Self(reports.to_vec())
+    }
+}
+
+impl Post<AdcReport> for MockReports {
+    fn posted(self, report: AdcReport) -> Self {
+        Self(self.0.into_iter().chain([report]).collect())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum MockSampler {
+    Started,
+    Stopped,
+}
+
+impl Sampler for MockSampler {
+    type Samples = Vec<u16>;
+
+    fn started(self) -> Self {
+        Self::Started
+    }
+
+    fn stopped(self) -> Self {
+        Self::Stopped
     }
 }

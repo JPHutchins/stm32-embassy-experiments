@@ -1,14 +1,20 @@
 #![no_std]
 
+mod adc;
 mod blink;
 mod button;
+mod double_buffer;
 #[cfg(test)]
 mod mock;
 
+pub use adc::{Adc, AdcEvent, AdcReport, DECIMATED_LEN, Input, Measurement, SEQUENCE};
+use blink::Activity;
 pub use blink::{Blink, BlinkEvent};
 pub use button::{Button, ButtonEvent};
+pub use double_buffer::{Completion, DoubleBuffer, Half, Lease};
 
 use core::convert::Infallible;
+use core::ops::Deref;
 use embedded_hal::digital::{OutputPin, PinState};
 
 pub trait Machine: Sized {
@@ -22,21 +28,31 @@ pub trait Board {
     type BlinkTimer: Timer;
     type Button: EdgeInput;
     type DebounceTimer: Timer;
-    type Events: Post<Event>;
+    type Presses: Post<Pressed>;
+    type Sampler: Sampler;
+    type Reports: Post<AdcReport>;
 }
+
+pub type Samples<B> = <<B as Board>::Sampler as Sampler>::Samples;
 
 pub struct App<B: Board> {
     blink: Blink<B::Led, B::BlinkTimer>,
-    button: Button<B::Button, B::DebounceTimer, B::Events>,
+    button: Button<B::Button, B::DebounceTimer, B::Presses>,
+    adc: Adc<B::Sampler, B::Reports>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Event<S> {
+    Blink(BlinkEvent),
+    Button(ButtonEvent),
+    Adc(AdcEvent<S>),
+    Pressed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum Event {
-    Blink(BlinkEvent),
-    Button(ButtonEvent),
-    Pressed,
-}
+pub struct Pressed;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -45,21 +61,24 @@ pub enum Delivery {
     Guaranteed,
 }
 
-impl Event {
-    pub const fn delivery(self) -> Delivery {
+impl<S> Event<S> {
+    pub const fn delivery(&self) -> Delivery {
         match self {
             Self::Blink(BlinkEvent::Tick) => Delivery::Droppable,
             Self::Blink(BlinkEvent::Toggle)
             | Self::Button(ButtonEvent::Edge | ButtonEvent::Settled)
+            | Self::Adc(
+                AdcEvent::Start | AdcEvent::Stop | AdcEvent::Samples(_) | AdcEvent::Overrun,
+            )
             | Self::Pressed => Delivery::Guaranteed,
         }
     }
 }
 
 impl<B: Board> Machine for App<B> {
-    type Event = Event;
+    type Event = Event<Samples<B>>;
 
-    fn run(self, event: Event) -> Self {
+    fn run(self, event: Self::Event) -> Self {
         match event {
             Event::Blink(event) => Self {
                 blink: self.blink.run(event),
@@ -69,25 +88,46 @@ impl<B: Board> Machine for App<B> {
                 button: self.button.run(event),
                 ..self
             },
-            Event::Pressed => Self {
-                blink: self.blink.run(BlinkEvent::Toggle),
+            Event::Adc(event) => Self {
+                adc: self.adc.run(event),
                 ..self
             },
+            Event::Pressed => {
+                Self::following(self.blink.run(BlinkEvent::Toggle), self.button, self.adc)
+            }
         }
     }
 }
 
 impl<B: Board> App<B> {
+    fn following(
+        blink: Blink<B::Led, B::BlinkTimer>,
+        button: Button<B::Button, B::DebounceTimer, B::Presses>,
+        adc: Adc<B::Sampler, B::Reports>,
+    ) -> Self {
+        Self {
+            adc: adc.run(match blink.activity() {
+                Activity::Running => AdcEvent::Start,
+                Activity::Paused => AdcEvent::Stop,
+            }),
+            blink,
+            button,
+        }
+    }
+
     pub fn start(
         led: B::Led,
         blink_timer: B::BlinkTimer,
         button: B::Button,
         debounce_timer: B::DebounceTimer,
-        events: B::Events,
+        presses: B::Presses,
+        sampler: B::Sampler,
+        reports: B::Reports,
     ) -> Self {
         Self {
             blink: Blink::start(led, blink_timer),
-            button: Button::start(button, debounce_timer, events),
+            button: Button::start(button, debounce_timer, presses),
+            adc: Adc::start(sampler, reports),
         }
     }
 }
@@ -107,18 +147,32 @@ pub trait Post<E>: Sized {
     fn posted(self, event: E) -> Self;
 }
 
+pub trait Sampler: Sized {
+    type Samples: Deref<Target = [u16]>;
+
+    fn started(self) -> Self;
+    fn stopped(self) -> Self;
+}
+
 #[cfg(feature = "defmt")]
 impl<B: Board> defmt::Format for App<B> {
     fn format(&self, f: defmt::Formatter) {
-        defmt::write!(f, "{} {}", self.blink, self.button)
+        defmt::write!(f, "{} {} {}", self.blink, self.button, self.adc)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::mock::{MockBoard, MockEvents, MockLed, MockPin, MockTimer};
-    use super::{App, Blink, BlinkEvent, Button, ButtonEvent, Delivery, Event, Machine};
+    extern crate std;
+
+    use super::mock::{
+        MockBoard, MockLed, MockPin, MockPresses, MockReports, MockSampler, MockTimer,
+    };
+    use super::{
+        Adc, AdcEvent, App, Blink, BlinkEvent, Button, ButtonEvent, Delivery, Event, Machine,
+    };
     use embedded_hal::digital::PinState;
+    use std::vec::Vec;
 
     fn started() -> App<MockBoard> {
         App::start(
@@ -126,35 +180,67 @@ mod tests {
             MockTimer::Stopped,
             MockPin::disarmed(PinState::Low),
             MockTimer::Stopped,
-            MockEvents::default(),
+            MockPresses::default(),
+            MockSampler::Stopped,
+            MockReports::default(),
         )
     }
 
     #[test]
-    fn pressed_is_routed_to_the_blink_region_as_a_toggle() {
-        let App { blink, button } = started().run(Event::Pressed);
-        let App {
-            blink: expected_blink,
-            button: expected_button,
-        } = started();
-        assert_eq!(blink, expected_blink.run(BlinkEvent::Toggle));
-        assert_eq!(button, expected_button);
+    fn pressed_toggles_the_blink_and_the_adc_follows_its_activity() {
+        let App { blink, button, adc } = started().run(Event::Pressed);
+        let expected = started();
+        assert_eq!(blink, expected.blink.run(BlinkEvent::Toggle));
+        assert_eq!(button, expected.button);
+        assert_eq!(adc, expected.adc.run(AdcEvent::Stop));
     }
 
     #[test]
-    fn button_events_reach_only_the_button_region() {
-        let App { blink, button } = started().run(Event::Button(ButtonEvent::Edge));
-        let App {
-            blink: expected_blink,
-            button: expected_button,
-        } = started();
-        assert_eq!(blink, expected_blink);
-        assert_eq!(button, expected_button.run(ButtonEvent::Edge));
+    fn after_an_overrun_two_presses_bring_blink_and_adc_back_in_step() {
+        let App { blink, adc, .. } = [
+            Event::Adc(AdcEvent::Overrun),
+            Event::Pressed,
+            Event::Pressed,
+        ]
+        .into_iter()
+        .fold(started(), App::run);
+        let expected = started();
+        assert_eq!(
+            blink,
+            expected
+                .blink
+                .run(BlinkEvent::Toggle)
+                .run(BlinkEvent::Toggle)
+        );
+        assert_eq!(
+            adc,
+            expected
+                .adc
+                .run(AdcEvent::Overrun)
+                .run(AdcEvent::Stop)
+                .run(AdcEvent::Start)
+        );
     }
 
     #[test]
-    fn start_blinks_and_arms_the_button_at_its_sampled_level() {
-        let App { blink, button } = started();
+    fn each_region_event_reaches_only_its_region() {
+        let App { blink, button, adc } = started().run(Event::Button(ButtonEvent::Edge));
+        let expected = started();
+        assert_eq!(blink, expected.blink);
+        assert_eq!(button, expected.button.run(ButtonEvent::Edge));
+        assert_eq!(adc, expected.adc);
+
+        let App { blink, button, adc } =
+            started().run(Event::Adc(AdcEvent::Samples(Vec::from([7]))));
+        let expected = started();
+        assert_eq!(blink, expected.blink);
+        assert_eq!(button, expected.button);
+        assert_eq!(adc, expected.adc.run(AdcEvent::Samples(Vec::from([7]))));
+    }
+
+    #[test]
+    fn start_blinks_samples_and_arms_the_button_at_its_sampled_level() {
+        let App { blink, button, adc } = started();
         assert_eq!(
             blink,
             Blink::start(MockLed(PinState::Low), MockTimer::Stopped)
@@ -164,8 +250,12 @@ mod tests {
             Button::start(
                 MockPin::disarmed(PinState::Low),
                 MockTimer::Stopped,
-                MockEvents::default()
+                MockPresses::default()
             )
+        );
+        assert_eq!(
+            adc,
+            Adc::start(MockSampler::Stopped, MockReports::default())
         );
     }
 
@@ -176,6 +266,13 @@ mod tests {
             (Event::Blink(BlinkEvent::Toggle), Delivery::Guaranteed),
             (Event::Button(ButtonEvent::Edge), Delivery::Guaranteed),
             (Event::Button(ButtonEvent::Settled), Delivery::Guaranteed),
+            (Event::Adc(AdcEvent::Start), Delivery::Guaranteed),
+            (Event::Adc(AdcEvent::Stop), Delivery::Guaranteed),
+            (
+                Event::Adc(AdcEvent::Samples(Vec::from([1]))),
+                Delivery::Guaranteed,
+            ),
+            (Event::Adc(AdcEvent::Overrun), Delivery::Guaranteed),
             (Event::Pressed, Delivery::Guaranteed),
         ]
         .into_iter()

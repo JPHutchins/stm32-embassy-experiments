@@ -1,4 +1,4 @@
-use crate::{EdgeInput, Event, Machine, Post, Timer};
+use crate::{EdgeInput, Machine, Post, Pressed, Timer};
 use embedded_hal::digital::PinState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,7 +18,7 @@ impl<P, D, Q> Machine for Button<P, D, Q>
 where
     P: EdgeInput,
     D: Timer,
-    Q: Post<Event>,
+    Q: Post<Pressed>,
 {
     type Event = ButtonEvent;
 
@@ -36,10 +36,10 @@ impl<P, D, Q> Button<P, D, Q>
 where
     P: EdgeInput,
     D: Timer,
-    Q: Post<Event>,
+    Q: Post<Pressed>,
 {
-    pub fn start(pin: P, timer: D, events: Q) -> Self {
-        Self::Stable(Stable::at(pin.armed().sampled(), timer, events))
+    pub fn start(pin: P, timer: D, presses: Q) -> Self {
+        Self::Stable(Stable::at(pin.armed().sampled(), timer, presses))
     }
 }
 
@@ -47,7 +47,7 @@ where
 pub struct Stable<P, D, Q> {
     pin: P,
     timer: D,
-    events: Q,
+    presses: Q,
     level: PinState,
 }
 
@@ -55,7 +55,7 @@ pub struct Stable<P, D, Q> {
 pub struct Settling<P, D, Q> {
     pin: P,
     timer: D,
-    events: Q,
+    presses: Q,
     from: PinState,
     previous: PinState,
 }
@@ -64,13 +64,13 @@ impl<P, D, Q> Stable<P, D, Q>
 where
     P: EdgeInput,
     D: Timer,
-    Q: Post<Event>,
+    Q: Post<Pressed>,
 {
-    fn at((level, pin): (PinState, P), timer: D, events: Q) -> Self {
+    fn at((level, pin): (PinState, P), timer: D, presses: Q) -> Self {
         Self {
             pin,
             timer,
-            events,
+            presses,
             level,
         }
     }
@@ -79,7 +79,7 @@ where
         Settling {
             pin: self.pin.disarmed(),
             timer: self.timer.started(),
-            events: self.events,
+            presses: self.presses,
             from: self.level,
             previous: self.level,
         }
@@ -90,13 +90,13 @@ impl<P, D, Q> Settling<P, D, Q>
 where
     P: EdgeInput,
     D: Timer,
-    Q: Post<Event>,
+    Q: Post<Pressed>,
 {
     fn resample(self) -> Button<P, D, Q> {
         Self::judged(
             self.pin.armed().sampled(),
             self.timer,
-            self.events,
+            self.presses,
             self.from,
             self.previous,
         )
@@ -105,7 +105,7 @@ where
     fn judged(
         (level, pin): (PinState, P),
         timer: D,
-        events: Q,
+        presses: Q,
         from: PinState,
         previous: PinState,
     ) -> Button<P, D, Q> {
@@ -113,12 +113,12 @@ where
             true => Button::Stable(Stable::at(
                 (level, pin),
                 timer.stopped(),
-                posted_if_pressed(events, from, level),
+                posted_if_pressed(presses, from, level),
             )),
             false => Button::Settling(Self {
                 pin: pin.disarmed(),
                 timer: timer.started(),
-                events,
+                presses,
                 from,
                 previous: level,
             }),
@@ -126,12 +126,12 @@ where
     }
 }
 
-fn posted_if_pressed<Q: Post<Event>>(events: Q, from: PinState, to: PinState) -> Q {
+fn posted_if_pressed<Q: Post<Pressed>>(presses: Q, from: PinState, to: PinState) -> Q {
     match (from, to) {
-        (PinState::Low, PinState::High) => events.posted(Event::Pressed),
+        (PinState::Low, PinState::High) => presses.posted(Pressed),
         (PinState::Low, PinState::Low)
         | (PinState::High, PinState::High)
-        | (PinState::High, PinState::Low) => events,
+        | (PinState::High, PinState::Low) => presses,
     }
 }
 
@@ -153,17 +153,17 @@ impl<P, D, Q> defmt::Format for Button<P, D, Q> {
 #[cfg(test)]
 mod tests {
     use super::{Button, ButtonEvent, Settling, Stable};
-    use crate::mock::{MockEvents, MockPin, MockTimer};
-    use crate::{Event, Machine};
+    use crate::Machine;
+    use crate::mock::{MockPin, MockPresses, MockTimer};
     use embedded_hal::digital::PinState;
 
-    type MockButton = Button<MockPin, MockTimer, MockEvents>;
+    type MockButton = Button<MockPin, MockTimer, MockPresses>;
 
-    fn stable(level: PinState, timer: MockTimer, posted: &[Event]) -> MockButton {
+    fn stable(level: PinState, timer: MockTimer, presses: usize) -> MockButton {
         Button::Stable(Stable {
             pin: MockPin::armed(level),
             timer,
-            events: MockEvents::from(posted),
+            presses: MockPresses(presses),
             level,
         })
     }
@@ -172,7 +172,7 @@ mod tests {
         Button::Settling(Settling {
             pin: MockPin::disarmed(now),
             timer: MockTimer::Started,
-            events: MockEvents::default(),
+            presses: MockPresses::default(),
             from,
             previous,
         })
@@ -197,16 +197,16 @@ mod tests {
             Button::start(
                 MockPin::disarmed(PinState::High),
                 MockTimer::Stopped,
-                MockEvents::default()
+                MockPresses::default()
             ),
-            stable(PinState::High, MockTimer::Stopped, &[])
+            stable(PinState::High, MockTimer::Stopped, 0)
         );
     }
 
     #[test]
     fn an_edge_disarms_the_pin_and_starts_the_debounce_timer() {
         assert_eq!(
-            stable(PinState::Low, MockTimer::Stopped, &[]).run(ButtonEvent::Edge),
+            stable(PinState::Low, MockTimer::Stopped, 0).run(ButtonEvent::Edge),
             settling(PinState::Low, PinState::Low, PinState::Low)
         );
     }
@@ -216,7 +216,7 @@ mod tests {
         [
             (
                 settling(PinState::Low, PinState::Low, PinState::Low),
-                stable(PinState::Low, MockTimer::Stopped, &[]),
+                stable(PinState::Low, MockTimer::Stopped, 0),
             ),
             (
                 settling(PinState::Low, PinState::Low, PinState::High),
@@ -224,7 +224,7 @@ mod tests {
             ),
             (
                 settling(PinState::Low, PinState::High, PinState::High),
-                stable(PinState::High, MockTimer::Stopped, &[Event::Pressed]),
+                stable(PinState::High, MockTimer::Stopped, 1),
             ),
             (
                 settling(PinState::Low, PinState::High, PinState::Low),
@@ -232,11 +232,11 @@ mod tests {
             ),
             (
                 settling(PinState::High, PinState::Low, PinState::Low),
-                stable(PinState::Low, MockTimer::Stopped, &[]),
+                stable(PinState::Low, MockTimer::Stopped, 0),
             ),
             (
                 settling(PinState::High, PinState::High, PinState::High),
-                stable(PinState::High, MockTimer::Stopped, &[]),
+                stable(PinState::High, MockTimer::Stopped, 0),
             ),
         ]
         .into_iter()
@@ -255,10 +255,10 @@ mod tests {
             ]
             .into_iter()
             .fold(
-                stable(PinState::Low, MockTimer::Stopped, &[]),
+                stable(PinState::Low, MockTimer::Stopped, 0),
                 |button, (event, level)| with_pin_at(button, level).run(event)
             ),
-            stable(PinState::High, MockTimer::Stopped, &[Event::Pressed])
+            stable(PinState::High, MockTimer::Stopped, 1)
         );
     }
 
@@ -269,8 +269,8 @@ mod tests {
             settling(PinState::Low, PinState::Low, PinState::High)
         );
         assert_eq!(
-            stable(PinState::Low, MockTimer::Stopped, &[]).run(ButtonEvent::Settled),
-            stable(PinState::Low, MockTimer::Stopped, &[])
+            stable(PinState::Low, MockTimer::Stopped, 0).run(ButtonEvent::Settled),
+            stable(PinState::Low, MockTimer::Stopped, 0)
         );
     }
 }

@@ -42,6 +42,21 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Activity {
+    Running,
+    Paused,
+}
+
+impl<L, T> Blink<L, T> {
+    pub(crate) const fn activity(&self) -> Activity {
+        match self {
+            Self::Blinking(_) => Activity::Running,
+            Self::Paused(_) => Activity::Paused,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Blinking<L, T> {
     led: L,

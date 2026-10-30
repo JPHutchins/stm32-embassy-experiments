@@ -17,6 +17,7 @@ app = { path = "app", features = ["defmt"] }
 embassy-sync = { version = "0.8.0", features = ["defmt"] }
 futures-util = { version = "0.3.34", default-features = false }
 embedded-hal = "1.0.0"
+critical-section = "1.2.0"
 embassy-stm32 = { version = "0.6.0", features = [
   "defmt",
   "stm32f407vg",
@@ -33,10 +34,10 @@ embassy-executor = { version = "0.10.0", features = [
 embassy-time = { version = "0.5.1", features = [
   "defmt",
   "defmt-timestamp-uptime",
-  "tick-hz-32_768",
+  "tick-hz-1_000_000",
 ] }
 defmt = "1.0.1"
-defmt-rtt = "1.0.0"
+defmt-rtt = { version = "1.0.0", features = ["disable-blocking-mode"] }
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 cortex-m = { version = "0.7.6", features = [
   "inline-asm",
