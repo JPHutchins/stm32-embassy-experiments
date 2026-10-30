@@ -42,6 +42,10 @@
               pkgs.nixfmt
               pkgs.ruff
               pkgs.taplo
+              pkgs.actionlint
+              pkgs.shellcheck
+              pkgs.zizmor
+              pkgs.yamlfmt
               (camas.packages.${system}.with-mcp.overridePythonAttrs { doCheck = false; })
             ];
           };

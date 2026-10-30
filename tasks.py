@@ -5,6 +5,7 @@ fmt = Parallel(
     Task("nixfmt flake.nix", mutates=True),
     Task("ruff format", mutates=True),
     Task("taplo fmt", mutates=True),
+    Task("yamlfmt .", mutates=True),
 )
 
 fmt_check = Parallel(
@@ -12,10 +13,19 @@ fmt_check = Parallel(
     "nixfmt --check flake.nix",
     "ruff format --check",
     "taplo fmt --check",
+    "yamlfmt -lint .",
 )
+
+lint = Parallel(
+    "ruff check",
+    "camas --check",
+    "actionlint",
+    "zizmor .",
+)
+
 clippy = Task("cargo clippy --release -- -D warnings")
 build = Task("cargo build --release")
-check = Parallel(fmt_check, Sequential(clippy, build, name="cargo"))
+check = Parallel(fmt_check, lint, Sequential(clippy, build, name="cargo"))
 
 flash = Task("cargo run --release")
 
