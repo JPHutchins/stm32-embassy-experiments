@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "camas": {
+      "type": "stdio",
+      "command": "camas",
+      "args": ["mcp"]
+    }
+  }
+}
